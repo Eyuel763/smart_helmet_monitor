@@ -8,14 +8,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-const String esp32Url = "ws://10.212.39.50:81";
+const String esp32Url = "ws://10.12.80.50:81";
 
 void main() {
   runApp(const MyApp());
 }
-
 // APP
-
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -29,9 +27,7 @@ class MyApp extends StatelessWidget {
     );
   }
 }
-
 // SCREEN 
-
 class SmartHelmetMonitorScreen extends StatefulWidget {
   const SmartHelmetMonitorScreen({super.key});
 
@@ -53,23 +49,25 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
   // SENSOR VALUES 
   int mq2 = 0;
   int mq7 = 0;
-  double bodyTemp = 0;
-  double ambientTemp = 0;
+  double bodyTemp = 0.0;
+  double ambientTemp = 0.0;
+  double heartRate = 0.0;
+  double spo2 = 0.0;
 
   String gasStatus = "SAFE";
   String fatigueStatus = "LOW";
-  String mq2Display = "0";
-  String mq7Display = "0";
+  String vitalStatus = "NORMAL"; 
 
   Color gasColor = Colors.green;
   Color fatigueColor = Colors.green;
+  Color vitalColor = Colors.green; 
 
   List<String> alertLog = [];
-  final int mqGasThreshold = 1500;
-  final double bodyTempThreshold = 38.5;
 
+  final int mqGasThreshold = 2600; 
+  final double highFeverThreshold = 38.5;
+  final double lowSpo2Threshold = 90.0; 
   // INIT 
-
   @override
   void initState() {
     super.initState();
@@ -77,9 +75,7 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
     _initNotifications();
     _connectWebSocket();
   }
-
   // WEBSOCKET 
-
   void _connectWebSocket() {
     try {
       channel = WebSocketChannel.connect(Uri.parse(esp32Url));
@@ -99,62 +95,62 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
 
   void _handleDisconnect() {
     setState(() => connected = false);
-    _stopAlarm();
+    _stopAlarm(); 
     reconnectTimer?.cancel();
     reconnectTimer = Timer(const Duration(seconds: 3), _connectWebSocket);
   }
-
   // DATA HANDLING 
-
   void _handleIncomingData(String message) {
     final data = jsonDecode(message);
 
     setState(() {
-      mq2 = data['mq2'];
-      mq7 = data['mq7'];
-      bodyTemp = (data['body_temp'] as num).toDouble();
-      ambientTemp = (data['ambient_temp'] as num).toDouble();
+      mq2 = data['mq2'] as int? ?? 0;
+      mq7 = data['mq7'] as int? ?? 0;
+      bodyTemp = (data['body_temp'] as num?)?.toDouble() ?? 0.0;
+      ambientTemp = (data['ambient_temp'] as num?)?.toDouble() ?? 0.0;
+      heartRate = (data['heart_rate'] as num?)?.toDouble() ?? 0.0;
+      spo2 = (data['spo2'] as num?)?.toDouble() ?? 0.0;
+      // --- ERROR CHECKS ---
+      bool mq2Error = (mq2 == 0);
+      bool mq7Error = (mq7 == 0);
+      bool bodyTempError = (bodyTemp == 0.0);
+      bool vitalError = (heartRate == 0.0 && spo2 == 0.0); 
 
-      gasStatus = mq2 > 400 ? "DANGER" : "SAFE";
-      fatigueStatus = bodyTemp > 38 ? "HIGH" : "LOW";
-
-      gasColor = gasStatus == "DANGER" ? Colors.red : Colors.green;
-      fatigueColor = fatigueStatus == "HIGH" ? Colors.red : Colors.green;
-
-      if (mq2 == 0) {
-        mq2Display = "ERROR";
-        gasStatus = mq7 > mqGasThreshold ? "DANGER" : "SAFE";
-      } else {
-        mq2Display = mq2.toString();
-        gasStatus = mq2 > mqGasThreshold ? "DANGER" : "SAFE";
-      }
-      
-      if (mq7 == 0) {
-        mq7Display = "ERROR";
-        if (mq2 == 0) {
+      // Gas Status Logic
+      if (mq2Error && mq7Error) {
           gasStatus = "ERROR";
-        } else {
-          gasStatus = gasStatus;
-        }
+      } else if (!mq2Error || !mq7Error && mq7 >= mqGasThreshold) {
+          gasStatus = "DANGER";
       } else {
-        mq7Display = mq7.toString();
-        if (gasStatus != "DANGER") gasStatus = mq7 > mqGasThreshold ? "DANGER" : "SAFE";
+          gasStatus = "SAFE";
       }
-      if (mq2 == 0 && mq7 == 0) gasStatus = "ERROR";
 
-      fatigueStatus = bodyTemp >= bodyTempThreshold ? "HIGH" : "LOW";
-      if (bodyTemp == 0.0) fatigueStatus = "ERROR"; 
-
-      if (gasStatus == "ERROR") {
-        gasColor = Colors.yellow;
+      // Fatigue Status Logic
+      if (bodyTempError) {
+          fatigueStatus = "ERROR";
       } else {
-        gasColor = gasStatus == "DANGER" ? Colors.red : Colors.green;
+          fatigueStatus = bodyTemp >= highFeverThreshold ? "HIGH" : "LOW";
+      }
+      // VITAL STATUS LOGIC 
+      if (vitalError) {
+          vitalStatus = "ERROR";
+      } else if (spo2 > 0.0 && spo2 < lowSpo2Threshold) {
+          vitalStatus = "CRITICAL";
+      } else {
+          vitalStatus = "NORMAL";
       }
       
-      if (fatigueStatus == "ERROR") {
-        fatigueColor = Colors.yellow;
+      // COLOR LOGIC 
+      gasColor = gasStatus == "ERROR" ? Colors.yellow : (gasStatus == "DANGER" ? Colors.red : Colors.green);
+      fatigueColor = fatigueStatus == "ERROR" ? Colors.yellow : (fatigueStatus == "HIGH" ? Colors.red : Colors.green);
+      
+      // NEW VITAL COLOR LOGIC
+      if (vitalStatus == "ERROR") {
+          vitalColor = Colors.yellow;
+      } else if (vitalStatus == "CRITICAL") {
+          vitalColor = Colors.red;
       } else {
-        fatigueColor = fatigueStatus == "HIGH" ? Colors.red : Colors.green;
+          vitalColor = Colors.green;
       }
     });
 
@@ -164,29 +160,40 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
   // ALERT LOGIC 
 
   void _handleAlerts() {
-    if (gasStatus == "DANGER" || fatigueStatus == "HIGH") {
+    // Alarm plays if there is a DANGER, HIGH, or CRITICAL status.
+    if (gasStatus == "DANGER" || fatigueStatus == "HIGH" || vitalStatus == "CRITICAL") {
       _playAlarm();
 
-      final alert =
-          "${DateTime.now().toLocal()} | Gas: $gasStatus | Fatigue: $fatigueStatus";
-
+      String notificationBody = "";
+      String logMessage = "";
+      
+      if (gasStatus == "DANGER") {
+          notificationBody = "Dangerous gas detected!";
+          logMessage = "GAS DANGER";
+      } else if (fatigueStatus == "HIGH") {
+          notificationBody = "High fever/fatigue detected!";
+          logMessage = "HIGH FEVER/FATIGUE";
+      } else if (vitalStatus == "CRITICAL") {
+          notificationBody = "Critical SpO2 level detected!";
+          logMessage = "CRITICAL SpO2";
+      }
+      
+      final alert = "${DateTime.now().toLocal()} | ALERT: $logMessage";
       _saveAlert(alert);
 
       _showNotification(
         "SAFETY ALERT",
-        gasStatus == "DANGER"
-            ? "Dangerous gas detected!"
-            : "High fatigue detected!",
+        notificationBody,
       );
     } else {
       _stopAlarm();
     }
   }
-
   // ALERT STORAGE 
-
   Future<void> _saveAlert(String alert) async {
-    alertLog.insert(0, alert);
+    setState(() {
+      alertLog.insert(0, alert);
+    });
     final prefs = await SharedPreferences.getInstance();
     prefs.setStringList("alerts", alertLog);
   }
@@ -197,22 +204,18 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
       alertLog = prefs.getStringList("alerts") ?? [];
     });
   }
-
   // SOUND 
-
   Future<void> _playAlarm() async {
     if (alarmPlaying) return;
     alarmPlaying = true;
-    await _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
+    await _audioPlayer.play(AssetSource('sounds/alarm.mp3'), volume: 0.5);
   }
 
   Future<void> _stopAlarm() async {
     alarmPlaying = false;
     await _audioPlayer.stop();
   }
-
   // NOTIFICATIONS 
-
   void _initNotifications() {
     _notifications = FlutterLocalNotificationsPlugin();
     const android =
@@ -226,7 +229,7 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
       'Danger Alerts',
       importance: Importance.max,
       priority: Priority.high,
-      sound: RawResourceAndroidNotificationSound('alarm'),
+      sound: RawResourceAndroidNotificationSound('alarm'), 
     );
 
     await _notifications.show(
@@ -238,13 +241,31 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
   }
 
   // UI 
+  // Helper function to determine display value for ADC
+  String getGasDisplay(int value, String status) {
+    if (value == 0 && status != "DANGER") return "ERROR";
+    return value.toString();
+  }
+
+  // Helper function to determine display value for Temp (DS18B20/DHT11)
+  String getTempDisplay(double value) {
+    if (value == 0.0) return "ERROR";
+    return "${value.toStringAsFixed(1)} °C";
+  }
+
+  // Helper function for Vitals (Heart Rate/SpO2)
+  String getVitalDisplay(double value) {
+    if (value == 0.0 && vitalStatus != "CRITICAL") return "ERROR";
+    return value.toStringAsFixed(value < 100 ? 1 : 0); // SpO2 needs 1 decimal, HR can be 0
+  }
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF1A1B26),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView( 
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -268,7 +289,7 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
                 ],
               ),
               const SizedBox(height: 20),
-
+              // STATUS CARDS
               StatusCard(
                 title: "GAS LEVEL",
                 status: gasStatus,
@@ -278,52 +299,84 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
               const SizedBox(height: 12),
 
               StatusCard(
-                title: "FATIGUE RISK",
+                title: "FEVER/FATIGUE RISK",
                 status: fatigueStatus,
                 statusColor: fatigueColor,
                 icon: Icons.bolt,
               ),
               const SizedBox(height: 12),
 
+              StatusCard(
+                title: "VITAL STATUS",
+                status: vitalStatus,
+                statusColor: vitalColor,
+                icon: Icons.monitor_heart,
+              ),
+              const SizedBox(height: 12),
+              
+              // METRIC ROW 1 (MQ2 / BODY TEMP)
               Row(
                 children: [
                   Expanded(
                       child: MetricCard(
-                          title: "MQ2 GAS", value: mq2Display)),
+                          title: "Methane GAS (ADC)", 
+                          value: getGasDisplay(mq2, gasStatus))), 
                   const SizedBox(width: 12),
                   Expanded(
                       child: MetricCard(
                           title: "BODY TEMP",
-                          value: bodyTemp == 0.0 ? "ERROR" : "${bodyTemp.toStringAsFixed(1)} °C")),
+                          value: getTempDisplay(bodyTemp))),
                 ],
               ),
               const SizedBox(height: 12),
+
+              // METRIC ROW 2 (MQ7 / AMBIENT TEMP)
               Row(
                 children: [
                   Expanded(
                       child: MetricCard(
-                          title: "MQ7 GAS", value: mq7Display)),
+                          title: "CO GAS (ADC)", 
+                          value: getGasDisplay(mq7, gasStatus))), 
                   const SizedBox(width: 12),
                   Expanded(
                       child: MetricCard(
                           title: "AMBIENT TEMP",
-                          value:
-                              ambientTemp == 0.0 ? "ERROR" : "${ambientTemp.toStringAsFixed(1)} °C")),
+                          value: getTempDisplay(ambientTemp))),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // NEW METRIC ROW 3 (HEART RATE / SpO2)
+              Row(
+                children: [
+                  Expanded(
+                      child: MetricCard(
+                          title: "HEART RATE (BPM)",
+                          value: heartRate == 0.0 && vitalStatus != "CRITICAL" 
+                                ? "ERROR" 
+                                : "${heartRate.toStringAsFixed(0)} bpm")), 
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: MetricCard(
+                          title: "Oxygen Saturation (%)",
+                          value: spo2 == 0.0 && vitalStatus != "CRITICAL"
+                                ? "ERROR" 
+                                : "${spo2.toStringAsFixed(1)} %")),
                 ],
               ),
               const SizedBox(height: 16),
 
+              // ALERT LOG
               Text("Recent Alerts",
                   style: GoogleFonts.roboto(
                       fontSize: 16, color: Colors.white70)),
               const Divider(),
 
-              Expanded(
-                child: ListView.builder(
-                  itemCount: alertLog.length,
-                  itemBuilder: (_, i) => AlertCard(alert: alertLog[i]),
-                ),
-              )
+              Column( 
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: alertLog.map((alert) => AlertCard(alert: alert)).toList(),
+              ),
+              const SizedBox(height: 30), 
             ],
           ),
         ),
@@ -334,7 +387,7 @@ class _SmartHelmetMonitorScreenState extends State<SmartHelmetMonitorScreen> {
   @override
   void dispose() {
     channel?.sink.close();
-    _audioPlayer.stop();
+    _audioPlayer.stop(); 
     _audioPlayer.dispose();
     reconnectTimer?.cancel();
     super.dispose();
@@ -349,31 +402,39 @@ class StatusCard extends StatelessWidget {
   final Color statusColor;
   final IconData icon;
 
-  const StatusCard(
-      {super.key,
-      required this.title,
-      required this.status,
-      required this.statusColor,
-      required this.icon});
+  const StatusCard({
+    super.key,
+    required this.title,
+    required this.status,
+    required this.statusColor,
+    required this.icon,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-          color: statusColor.withOpacity(0.2),
+          color: const Color(0xFF2D3142),
           borderRadius: BorderRadius.circular(8)),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
             Text(title,
                 style: GoogleFonts.roboto(color: Colors.white70)),
-            Text(status,
-                style: GoogleFonts.roboto(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white)),
+            const SizedBox(width: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                  color: statusColor,
+                  borderRadius: BorderRadius.circular(4)),
+              child: Text(status,
+                  style: GoogleFonts.roboto(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
+            ),
           ]),
           Icon(icon, color: Colors.white)
         ],
@@ -416,18 +477,16 @@ class AlertCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
-    final color = alert.contains("DANGER") || alert.contains("HIGH") || alert.contains("ERROR")
-        ? const Color(0xFF7D3C3C) // Reddish for danger/error
-        : const Color(0xFF3C7D4D); // Greenish for normal
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-          color: color,
+          color: const Color(0xFF2D3142),
           borderRadius: BorderRadius.circular(8)),
-      child: Text(alert,
-          style: GoogleFonts.roboto(color: Colors.white)),
+      child: Text(
+        alert,
+        style: GoogleFonts.roboto(fontSize: 14, color: Colors.white),
+      ),
     );
   }
 }
